@@ -10,6 +10,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -42,6 +45,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun smartExtract(text: String): List<String> {
+    val phraseBank = listOf("extreme weather", "heat wave", "ice sheet", "large-scale", "flood-prone", "marginalized communities", "global warming", "climate change", "greenhouse gases", "sea level", "renewable energy")
+    val normalized = text.lowercase(Locale.US).replace(Regex("[^a-z\\s-]"), " ")
+    val phrases = phraseBank.filter { normalized.contains(it) }
+    val ignored = setOf("n", "v", "adj", "adv", "ed", "ted", "ing", "d")
+    val words = Regex("[A-Za-z][A-Za-z'-]{1,}").findAll(text)
+        .map { it.value.trim() }.filter { it.lowercase(Locale.US) !in ignored }
+        .distinctBy { it.lowercase(Locale.US) }.toList()
+    val phraseWords = phrases.flatMap { it.split(" ") }.toSet()
+    return (phrases + words.filterNot { it.lowercase(Locale.US) in phraseWords }).distinctBy { it.lowercase(Locale.US) }
+}
+
 @Composable
 private fun WordCastApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -53,6 +68,10 @@ private fun WordCastApp() {
     var busy by remember { mutableStateOf(false) }
     var voice by remember { mutableStateOf("ذكر") }
     var speaking by remember { mutableStateOf(false) }
+    var activeTerm by remember { mutableStateOf("") }
+    var activeLetter by remember { mutableStateOf(-1) }
+    var activeStage by remember { mutableStateOf("") }
+    var motionEnabled by remember { mutableStateOf(true) }
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
 
     DisposableEffect(Unit) {
@@ -80,8 +99,7 @@ private fun WordCastApp() {
                     .process(image)
                     .addOnSuccessListener { result ->
                         rawText = result.text
-                        val tokens = Regex("[A-Za-z][A-Za-z'-]{1,}").findAll(result.text)
-                            .map { it.value.trim() }.distinctBy { it.lowercase(Locale.US) }.toList()
+                        val tokens = smartExtract(result.text)
                         wordText = tokens.joinToString("\n")
                         translations = emptyMap()
                         translated = false
@@ -149,21 +167,49 @@ private fun WordCastApp() {
         engine.stop()
         engine.language = Locale.US
         engine.setPitch(if (voice == "ذكر") 0.88f else 1.12f)
+        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(id: String?) {
+                val value = id.orEmpty()
+                android.os.Handler(context.mainLooper).post {
+                    val match = Regex("spell(\\d+)_(\\d+)").find(value)
+                    if (match != null) {
+                        val wi = match.groupValues[1].toInt()
+                        activeTerm = words.getOrNull(wi).orEmpty()
+                        activeLetter = match.groupValues[2].toInt()
+                        activeStage = "تهجئة حرفًا حرفًا"
+                    } else {
+                        activeLetter = -1
+                        val wi = Regex("(?:slow|normal|fast|arabic)(\\d+)").find(value)?.groupValues?.get(1)?.toIntOrNull() ?: -1
+                        activeTerm = words.getOrNull(wi).orEmpty()
+                        activeStage = when {
+                            value.startsWith("slow") -> "بطيء جدًا"
+                            value.startsWith("normal") -> "عادي"
+                            value.startsWith("fast") -> "سريع"
+                            value.startsWith("arabic") -> "المعنى بالعربي"
+                            else -> "الدرس"
+                        }
+                    }
+                }
+            }
+            override fun onDone(id: String?) {}
+            @Deprecated("Deprecated in Java") override fun onError(id: String?) {}
+        })
         words.forEachIndexed { index, w ->
             val ar = translations[w] ?: "الترجمة غير متاحة"
-            engine.setSpeechRate(0.65f)
+            engine.setSpeechRate(0.55f)
             engine.speak(w, if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "slow$index")
             engine.setSpeechRate(1.0f)
             engine.speak(w, TextToSpeech.QUEUE_ADD, null, "normal$index")
-            engine.setSpeechRate(1.25f)
+            engine.setSpeechRate(1.3f)
             engine.speak(w, TextToSpeech.QUEUE_ADD, null, "fast$index")
-            engine.setSpeechRate(0.85f)
-            engine.speak(w.toCharArray().joinToString(" "), TextToSpeech.QUEUE_ADD, null, "spell$index")
+            w.forEachIndexed { letterIndex, ch ->
+                if (ch.isLetter()) engine.speak(ch.toString(), TextToSpeech.QUEUE_ADD, null, "spell" + index + "_" + letterIndex)
+            }
             engine.setSpeechRate(1.0f)
             engine.speak(ar, TextToSpeech.QUEUE_ADD, null, "arabic$index")
         }
         speaking = true
-        status = "الدرس شغال: بطيء، طبيعي، سريع، تهجئة، ثم المعنى العربي."
+        status = "الدرس شغال: بطيء جدًا، عادي، سريع، تهجئة حرفًا حرفًا، ثم المعنى العربي."
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF9BE7D7), secondary = Color(0xFFB8C7FF), background = Color(0xFF0A1018), surface = Color(0xFF172838))) {
@@ -209,12 +255,36 @@ private fun WordCastApp() {
                 }
                 Text(status, color = Color(0xFF9BE7D7), fontSize = 12.sp)
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color(0xFF9BE7D7))
-                Text("معاينة الترجمة", color = Color.White, fontWeight = FontWeight.Bold)
+                Text("معاينة الدرس المتحرك", color = Color.White, fontWeight = FontWeight.Bold)
+                if (activeTerm.isNotBlank()) {
+                    val pulse by animateFloatAsState(if (motionEnabled) 1.035f else 1f, animationSpec = tween(350), label = "wordPulse")
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1B3448)), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().scale(pulse)) {
+                        Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(activeStage, color = Color(0xFF9BE7D7), fontSize = 12.sp)
+                            Row(horizontalArrangement = Arrangement.Center) {
+                                activeTerm.forEachIndexed { i, ch ->
+                                    Text(ch.toString(), color = if (i == activeLetter) Color(0xFF0A1018) else Color.White,
+                                        modifier = Modifier.padding(horizontal = 2.dp).background(if (i == activeLetter) Color(0xFF9BE7D7) else Color.Transparent, RoundedCornerShape(6.dp)).padding(horizontal = 3.dp, vertical = 5.dp),
+                                        fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Text(translations[activeTerm] ?: "", color = Color(0xFF9BE7D7))
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("الكلمات والتعبيرات", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("الحركة", color = Color(0xFFB9C7D5), fontSize = 12.sp)
+                    Switch(checked = motionEnabled, onCheckedChange = { motionEnabled = it })
+                }
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     itemsIndexed(wordText.lines().filter { it.isNotBlank() }) { _, w ->
                         Card(colors = CardDefaults.cardColors(containerColor = Color(0xCC172838)), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(w, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                Column(Modifier.weight(1f)) {
+                                    Text(w, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                    Text(if (w.contains(" ")) "تعبير متعدد الكلمات" else "كلمة مفردة", color = Color(0xFF8EA6B8), fontSize = 10.sp)
+                                }
                                 Text(translations[w] ?: "—", color = Color(0xFF9BE7D7))
                             }
                         }
