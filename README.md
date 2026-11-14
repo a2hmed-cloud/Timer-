@@ -1,11 +1,19 @@
-<div align="center">
+# WordCast AI
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Android vocabulary scanner and audio lesson maker.
 
-  <h1>Built with AI Studio</h2>
+## Current MVP
+- Select a page image from the device.
+- Extract printed text using Google ML Kit Text Recognition.
+- Review and edit extracted text.
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## Planned
+- Camera capture and document crop.
+- English-to-Arabic vocabulary extraction and translation.
+- Selectable male/female text-to-speech voice.
+- Three pronunciation speeds, spelling, and Arabic meaning.
+- Export audio and vocabulary list for offline study.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
-
-</div>
+## Build
+GitHub Actions builds a debug APK on every push to `main` and via manual workflow dispatch.
+Artifact: `WordCastAI-debug-apk`.
